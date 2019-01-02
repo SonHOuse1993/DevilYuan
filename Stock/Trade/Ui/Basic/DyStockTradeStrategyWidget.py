@@ -2,34 +2,28 @@ from DyCommon.Ui.DyTreeWidget import *
 from EventEngine.DyEvent import *
 from ...DyStockStrategyBase import *
 
-# CTA
-from ...Strategy.Cta.DyST_AbnormalVolatility import DyST_AbnormalVolatility
-from ...Strategy.Cta.DyST_IntraDayT import DyST_IntraDayT
-from ...Strategy.Cta.DyST_MaWalk import DyST_MaWalk
-from ...Strategy.Cta.DyST_BankIntraDaySpread import DyST_BankIntraDaySpread
+from . import DyStockTradeStrategyWidgetAutoFields
 
 
 class DyStockTradeStrategyWidget(DyTreeWidget):
-
-    strategyFields = \
-        [
-            ['CTA',
-                [DyST_AbnormalVolatility],
-                [DyST_IntraDayT],
-                [DyST_MaWalk],
-                [DyST_BankIntraDaySpread],
-            ],
-        ]
+    
+    strategyFields = DyStockTradeStrategyWidgetAutoFields
 
 
     def __init__(self, eventEngine):
-        self._strategies = {} # {strategy chName: strategy class}
+        self._strategies = {} # {strategy chName: [state, strategy class]}
         newFields = self._transform(self.__class__.strategyFields)
         
         super().__init__(newFields)
-        self.collapse('废弃')
+        self.collapse('Obsolete')
 
         self._eventEngine = eventEngine
+
+        # At last, set tooltip of each strategy to which broker it uses
+        for chName, (_, strategyCls) in self._strategies.items():
+            itemList =  self.findItems(chName, Qt.MatchExactly|Qt.MatchRecursive, 0)
+            assert len(itemList) == 1
+            itemList[0].setToolTip(0, 'broker={}'.format(strategyCls.broker))
 
     def on_itemClicked(self, item, column):
         super(DyStockTradeStrategyWidget, self).on_itemClicked(item, column)

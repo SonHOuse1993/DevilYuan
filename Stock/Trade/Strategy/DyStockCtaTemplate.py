@@ -278,9 +278,9 @@ class DyStockCtaTemplate(object):
         for code, pos in self._curPos.items():
             positions[code] = pos.getSavedData()
 
-        # add into saved data
-        if positions:
-            self._curSavedData['pos'] = positions
+        # add pos into saved data
+        assert 'pos' not in self._curSavedData # prevent strategy using 'pos' which is reserved by DY system.
+        self._curSavedData['pos'] = positions
 
         self._ctaEngine.saveOnClose(self._curTDay, self.__class__, self._curSavedData)
 
@@ -542,9 +542,15 @@ class DyStockCtaTemplate(object):
 
             # 前一日
             date = self._ctaEngine.tDaysOffsetInDb(DyTime.getDateStr(date, -1))
+            if date is None: # if no enough data, we'll report an error. 2018.06.11
+                self._info.print('没有足够的历史数据，策略的准备数据载入失败', DyLogData.error)
+                return None
 
             # prepare
             data = self.prepare(date, self._ctaEngine.dataEngine, self._info, codes, self._ctaEngine.errorDataEngine, self._strategyParam, isBackTesting)
+            if data is None:
+                self._info.print('策略准备数据失败', DyLogData.error)
+                return None
             try:
                 data = json.loads(json.dumps(data)) # Sometime there're non-python objects in @data, use this tricky way to convert to python objects.
             except:
@@ -581,6 +587,9 @@ class DyStockCtaTemplate(object):
 
             # prepare
             data = self.preparePos(date, self._ctaEngine.dataEngine, self._info, posCodes, self._ctaEngine.errorDataEngine, self._strategyParam, isBackTesting)
+            if data is None:
+                self._info.print('策略准备持仓数据失败', DyLogData.error)
+                return None
             try:
                 data = json.loads(json.dumps(data)) # Sometime there're non-python objects in @data, use this tricky way to convert to python objects.
             except:

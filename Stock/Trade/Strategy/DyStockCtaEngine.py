@@ -14,6 +14,7 @@ from ..Market.DyStockMarketFilter import *
 from ..AccountManager.Broker.DyStockGtjaAccountManager import *
 from ..AccountManager.Broker.DyStockYhAccountManager import *
 from ..AccountManager.Broker.DyStockSimuAccountManager import *
+from ..AccountManager.Broker.DyStockThsAccountManager import *
 
 
 class DyStockCtaEngine(object):
@@ -25,6 +26,8 @@ class DyStockCtaEngine(object):
 
     accountManagerMap = {
                          'yh': DyStockYhAccountManager,
+                         'ths': DyStockThsAccountManager,
+
                          'simu1': DyStockSimuAccountManager1,
                          'simu2': DyStockSimuAccountManager2,
                          'simu3': DyStockSimuAccountManager3,
@@ -806,6 +809,41 @@ class DyStockCtaEngine(object):
 
         return None
 
+    def _loadLatestOnClose(self, strategyCls):
+        """
+            载入策略保存的最新数据
+            主要是为了考虑策略可能停过一段交易日后再跑
+            @return: saved data, latest date
+        """
+        path = DyCommon.createPath('Stock/Program/Strategy/{}'.format(strategyCls.chName))
+        for _, dirs, _ in os.walk(path):
+            break
+
+        # loop from latest date
+        latestDate = None
+        savedData = None
+        dirs = sorted(dirs, reverse=True)
+        for i, date in enumerate(dirs):
+            latestDate = date
+            fileName = os.path.join(path, latestDate, 'savedData.json')
+            try:
+                with open(fileName) as f:
+                    savedData = json.load(f)
+                break
+            except:
+                if i == len(dirs) - 1: # last one
+                    break
+
+                # 'preparedPosData.json' should be mapping with 'savedData.json'.
+                # 如果用户通过'股票数据'模块的菜单生成策略准备数据，会导致生成的持仓准备数据不是根据最新的策略持仓。
+                # 这样会导致策略的持仓信息跟Broker和AccountManager的持仓信息不一致。
+                posFile = os.path.join(path, latestDate, 'preparedPosData.json')
+                if os.path.exists(posFile):
+                    self._info.print("股票CTA引擎: 策略[{}]持仓准备数据[{}]没有对应的收盘保存数据, 删除{}".format(strategyCls.chName, latestDate, posFile), DyLogData.warning)
+                    os.remove(posFile)
+
+        return savedData, latestDate
+
     def loadOnClose(self, date, strategyCls):
         """
             载入策略收盘后保存的数据，用来恢复策略实例状态
@@ -817,29 +855,25 @@ class DyStockCtaEngine(object):
         else:
             dates = [DyStockTradeCommon.strategyPreparedDataDay]
 
-        path = DyCommon.createPath('Stock/Program/Strategy/{}'.format(strategyCls.chName))
+        # load latest saved data of strategy
+        savedData, latestDate = self._loadLatestOnClose(strategyCls)
+        if savedData is None: # It's first time to run this strategy
+            return None
 
-        for date in dates:
-            fileName = os.path.join(path, date, 'savedData.json')
+        # check if date of latest saved data of strategy is previous latest trade day
+        if latestDate not in dates:
+            self._info.print('股票CTA引擎: 策略[{}]保存的数据日期[{}]跟最近的交易日{}不相同。如果策略用了"holdingPeriod"将会有问题'.format(strategyCls.chName, latestDate, dates), DyLogData.warning)
 
-            try:
-                with open(fileName) as f:
-                    savedData = json.load(f)
-
-                    return savedData
-
-            except Exception as ex:
-                pass
-
-        return None
+        # !!!We don't update holding period of strategy positions, just for simplicity.
+        # It means that if strategy cares about holding period, it will bring some problem.
+        return savedData
 
     def saveOnClose(self, date, strategyCls, savedData=None):
         """
             保存策略收盘后的数据，用来恢复策略实例状态
             @date: 当日
         """
-        if not savedData:
-            return
+        self._info.print('股票CTA引擎: 策略[{}]保存当日收盘数据'.format(strategyCls.chName), DyLogData.ind1)
 
         path = DyCommon.createPath('Stock/Program/Strategy/{}/{}'.format(strategyCls.chName, date))
         fileName = os.path.join(path, 'savedData.json')
@@ -1271,7 +1305,7 @@ class DyStockCtaBarAggFast:
             self._bars.setdefault(code, [None, None])
 
     def _createBar(self, refTick, tick, volume=0):
-        bar = DyStockCtaBarData()
+        bar = DyStockCtaBarData(str(self._barWidth) + 'm')
 
         bar.code = tick.code
         bar.name = tick.name
@@ -1281,6 +1315,11 @@ class DyStockCtaBarAggFast:
         bar.high = tick.price
         bar.low = tick.price
         bar.close = tick.price
+
+        # 今日数据
+        bar.curOpen = tick.open
+        bar.curHigh = tick.high
+        bar.curLow = tick.low
 
         bar.preClose = tick.preClose
 
@@ -1353,6 +1392,9 @@ class DyStockCtaBarAggFast:
                 bar.high = max(tick.price, bar.high)
                 bar.low = min(tick.price, bar.low)
                 bar.close = tick.price
+
+                bar.curHigh = max(tick.high, bar.curHigh)
+                bar.curLow = min(tick.low, bar.curLow)
 
                 if preTick is None:
                     if refTick.time < '09:30:00':

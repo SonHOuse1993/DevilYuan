@@ -38,13 +38,15 @@ class DyStockDataWind(object):
         # 添加'volume'，由此判断停牌是否
         fields_ = ','.join(fields) if 'volume' in fields else ','.join(fields + ['volume'])
 
-        for _ in range(3):
+        tries = 4
+        for i in range(1, tries+1):
             windData = self._gateway.wsd(code, fields_, startDate, endDate)
 
             if windData.ErrorCode != 0:
                 errorStr = "从Wind获取{0}:{1}, [{2}, {3}]WSD错误: {4}".format(code, name, startDate, endDate, windData.Data[0][0])
-                if 'Timeout' in errorStr:
-                    sleep(1)
+                if 'Timeout' in errorStr and i < tries:
+                    print(errorStr)
+                    sleep(i)
                     continue
             break
 
@@ -85,7 +87,7 @@ class DyStockDataWind(object):
 
             data = self._gateway.start()
             if data.ErrorCode != 0:
-                self._info.print("登录Wind失败", DyLogData.error)
+                self._info.print("登录Wind失败: ErrorCode={}, Data={}".format(data.ErrorCode, data.Data), DyLogData.error)
                 return False
 
             self._info.print("登录Wind成功")
@@ -129,6 +131,7 @@ class DyStockDataWind(object):
         for code, name in zip(data.Data[1], data.Data[2]):
             codes[code] = name
 
+        self._info.print("从Wind获取股票代码表成功")
         return codes
 
     def getSectorStockCodes(self, sectorCode, startDate, endDate):

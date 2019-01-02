@@ -3,6 +3,7 @@ from datetime import datetime
 import operator
 import json
 import numpy as np
+import pandas as pd
 from collections import OrderedDict
 
 
@@ -32,8 +33,8 @@ class DyStockSelectStrategyTemplate(object):
     continuousTicks = False # Ticks数据是不是以连续模式推入策略，非连续模式为{date: ticksDF of date}
 
     #----- 基类私有变量, 几日是跟@__nDays相对应 -----
-    __baseColNames = ['当日价格', '当日涨幅(%)', '当日指数涨幅(%)', '1日涨幅(%)', '1日指数涨幅(%)', '流通市值(亿)']
-    __nDays = 1
+    __baseColNames = ['当日价格', '当日涨幅(%)', '当日指数涨幅(%)', '流通市值(亿)']
+    __nDays = 0 # 后@__nDays日个股涨幅和指数涨幅，看起来比较鸡肋，所以去掉
 
 
     def __init__(self, param, info):
@@ -122,6 +123,10 @@ class DyStockSelectStrategyTemplate(object):
         """ 指数日线数据 """
         pass
 
+    def onEtfDays(self, code, df):
+        """ ETF日线数据 """
+        pass
+
     def onStockDays(self, code, df):
         """ 个股日线数据 """
         pass
@@ -182,13 +187,14 @@ class DyStockSelectStrategyTemplate(object):
             stock.append('') if increase is None else stock.append(increase)
 
             #----- @nDays涨幅 -----
-            # 个股
-            increase = self.__stockIncrease(stock[0], daysEngine)
-            stock.append('') if increase is None else stock.append(increase)
-                
-            # 指数
-            increase = self.__indexIncrease(daysEngine.getIndex(stock[0]), daysEngine)
-            stock.append('') if increase is None else stock.append(increase)
+            if self.__nDays > 0:
+                # 个股
+                increase = self.__stockIncrease(stock[0], daysEngine)
+                stock.append('') if increase is None else stock.append(increase)
+                    
+                # 指数
+                increase = self.__indexIncrease(daysEngine.getIndex(stock[0]), daysEngine)
+                stock.append('') if increase is None else stock.append(increase)
 
             # 流通市值
             floatMarketValue = self.__floatMarketValue(stock[0], daysEngine)
@@ -218,7 +224,9 @@ class DyStockSelectStrategyTemplate(object):
             data = daysEngine.getDataFrame(code)
 
             # get close at @baseDay
-            close = data.ix[baseTDay]['close']
+            close = data.ix[baseTDay, 'close']
+            if type(close) is pd.Series:
+                close = close[0]
 
             # get max price in @nDays
             highest = data.ix[startTDay:endTDay]['high'].max()
@@ -250,6 +258,10 @@ class DyStockSelectStrategyTemplate(object):
         except Exception as ex:
             marketValue = np.nan
 
+        # very strange, seems like Pandas bug.      2018.9.22
+        if type(marketValue) is pd.Series:
+            marketValue = marketValue[0]
+
         return None if np.isnan(marketValue) else marketValue
 
     def __stockMeanIncrease(self, code, daysEngine):
@@ -260,6 +272,8 @@ class DyStockSelectStrategyTemplate(object):
 
             # get close at @baseTDay
             close = df.ix[baseTDay, 'close']
+            if type(close) is pd.Series:
+                close = close[0]
 
             # get mean price in @nDays
             volume = df['volume'][startTDay:endTDay].sum()
@@ -281,6 +295,8 @@ class DyStockSelectStrategyTemplate(object):
 
             # get close at @baseTDay
             close = df.ix[baseTDay, 'close']
+            if type(close) is pd.Series:
+                close = close[0]
 
             # get mean index in @nDays
             mean = df[['open', 'high', 'low', 'close']][startTDay:endTDay].mean().mean()
@@ -328,10 +344,14 @@ class DyStockSelectStrategyTemplate(object):
 
             # get close at @baseTDay
             close = df.ix[baseDay, 'close']
+            if type(close) is pd.Series:
+                close = close[0]
 
             # previous close
             baseDayPos = df.index.get_loc(baseDay)
             preClose = df.ix[baseDayPos - 1, 'close']
+            if type(preClose) is pd.Series:
+                preClose = preClose[0]
 
             increase = (close - preClose)*100/preClose
 
@@ -360,6 +380,10 @@ class DyStockSelectStrategyTemplate(object):
             except Exception as ex:
                 price = np.nan
 
+        # very strange, seems like Pandas bug.      2018.9.22
+        if type(price) is pd.Series:
+            price = price[0]
+
         return None if np.isnan(price) else price
 
     def __indexCurIncrease(self, code, daysEngine):
@@ -372,10 +396,14 @@ class DyStockSelectStrategyTemplate(object):
 
             # get close at @baseTDay
             close = df.ix[baseDay, 'close']
+            if type(close) is pd.Series:
+                close = close[0]
 
             # previous close
             preDay = daysEngine.tDaysOffset(baseDay, -1)
             preClose = df.ix[preDay, 'close']
+            if type(preClose) is pd.Series:
+                preClose = preClose[0]
 
             increase = (close - preClose)*100/preClose
         except Exception as ex:
@@ -394,9 +422,13 @@ class DyStockSelectStrategyTemplate(object):
 
             # get close at @baseTDay
             close = df.ix[baseTDay, 'close']
+            if type(close) is pd.Series:
+                close = close[0]
 
             # get close after @nDays
             nDaysClose = df.ix[endTDay, 'close']
+            if type(nDaysClose) is pd.Series:
+                nDaysClose = nDaysClose[0]
 
             increase = (nDaysClose - close)*100/close
         except Exception as ex:
@@ -414,9 +446,13 @@ class DyStockSelectStrategyTemplate(object):
 
             # get close at @baseTDay
             close = df.ix[baseTDay, 'close']
+            if type(close) is pd.Series:
+                close = close[0]
 
             # get close after @nDays
             nDaysClose = df.ix[endTDay, 'close']
+            if type(nDaysClose) is pd.Series:
+                nDaysClose = nDaysClose[0]
 
             increase = (nDaysClose - close)*100/close
         except Exception as ex:

@@ -142,7 +142,7 @@ class DyStockBackTestingCtaEngine(object):
             # load ticks
             if not self._ticksEngine.loadCode(code, self._curTDay):
                 # 由于新浪分笔数据有时会缺失，所以不返回错误，只打印警告
-                self._info.print('{0}:{1}Ticks数据[{2}]载入失败'.format(code, self._daysEngine.stockCodes[code], self._curTDay), DyLogData.warning)
+                self._info.print('{0}:{1}Ticks数据[{2}]载入失败'.format(code, self._daysEngine.stockAllCodesFunds[code], self._curTDay), DyLogData.warning)
                 self._progress.update()
                 continue
 
@@ -162,7 +162,7 @@ class DyStockBackTestingCtaEngine(object):
                 tick = DyStockCtaTickData()
 
                 tick.code = code
-                tick.name = self._daysEngine.stockCodesFunds[code]
+                tick.name = self._daysEngine.stockAllCodesFunds[code]
 
                 tick.date = self._curTDay
                 tick.time = datetime.strftime('%H:%M:%S')
@@ -385,7 +385,7 @@ class DyStockBackTestingCtaEngine(object):
             # load ticks
             if not self._ticksEngine.loadCode(code, self._curTDay):
                 # 由于新浪分笔数据有时会缺失，所以不返回错误，只打印警告
-                self._info.print('{0}:{1}Ticks数据[{2}]载入失败'.format(code, self._daysEngine.stockCodes[code], self._curTDay), DyLogData.warning)
+                self._info.print('{0}:{1}Ticks数据[{2}]载入失败'.format(code, self._daysEngine.stockAllCodesFunds[code], self._curTDay), DyLogData.warning)
                 self._progress.update()
                 continue
 
@@ -393,7 +393,13 @@ class DyStockBackTestingCtaEngine(object):
 
             # 合成分钟Bar, 右闭合
             # 缺失的Bar设为NaN
-            df = df.resample(str(m) + 'min', closed='right', label='right')[['price', 'volume']].agg(OrderedDict([('price', 'ohlc'), ('volume', 'sum')]))
+            dfMorning = df[:'{} 12:00:00'.format(self._curTDay)] # 上午
+            dfMorning = dfMorning.resample(str(m) + 'min', closed='right', label='right', base=30)[['price', 'volume']].agg(OrderedDict([('price', 'ohlc'), ('volume', 'sum')]))
+
+            dfAfternoon = df['{} 13:00:00'.format(self._curTDay):] # 下午
+            dfAfternoon = dfAfternoon.resample(str(m) + 'min', closed='right', label='right')[['price', 'volume']].agg(OrderedDict([('price', 'ohlc'), ('volume', 'sum')]))
+
+            df = pd.concat([dfMorning, dfAfternoon])
             df.dropna(inplace=True) # drop缺失的Bars
 
             data = df.reset_index().values.tolist()
@@ -567,21 +573,24 @@ class DyStockBackTestingCtaEngine(object):
             self._info.print('账户管理[{0}]开盘前准备失败'.format(tDay), DyLogData.error)
             return False
 
-        # 设置策略行情过滤器
-        self._strategyMarketFilter.addFilter(self._strategy.onMonitor())
+        if self._strategy.onMonitor() or self._accountManager.onMonitor():
+            # 设置策略行情过滤器
+            self._strategyMarketFilter.addFilter(self._strategy.onMonitor())
 
-        # 得到策略要监控的股票池
-        monitoredCodes = self._strategy.onMonitor() + self._accountManager.onMonitor() + [DyStockCommon.etf300, DyStockCommon.etf500]
-        monitoredCodes = set(monitoredCodes) # 去除重复的股票
-        monitoredCodes -= set(DyStockCommon.indexes.keys()) # 新浪没有指数的Tick数据
-        monitoredCodes = list(monitoredCodes)
+            # 得到策略要监控的股票池
+            monitoredCodes = self._strategy.onMonitor() + self._accountManager.onMonitor() + [DyStockCommon.etf300, DyStockCommon.etf500]
+            monitoredCodes = set(monitoredCodes) # 去除重复的股票
+            monitoredCodes -= set(DyStockCommon.indexes.keys()) # 新浪没有指数的Tick数据
+            monitoredCodes = list(monitoredCodes)
 
-        # 载入监控股票池的回测数据
-        if not self._loadData(monitoredCodes):
-            return False
+            # 载入监控股票池的回测数据
+            if not self._loadData(monitoredCodes):
+                return False
 
-        # 运行回测数据
-        self._runData()
+            # 运行回测数据
+            self._runData()
+        else:
+            self._info.print('策略和账户管理[{}]没有监控的股票'.format(tDay), DyLogData.ind)
 
         # 收盘后的处理
         self._strategy.onClose()

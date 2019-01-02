@@ -23,7 +23,7 @@ class SimuTrader(WebTrader):
     dealHeader = ['证券名称', '证券代码', '合同号', '交易类型', '成交价', '成交数', '成交额', '成交时间']
     entrustHeader = ['委托序号', '证券代码', '证券名称', '类型', '委托价格', '委托数量', '委托时间', '成交数量', '委托状态']
     balanceHeader = ['可用余额', '证券市值', '资产总值']
-    positionHeader = ['证券代码', '证券名称', '实际数量', '可用数量', '市值(元)', '最新价格', '成本价(元)', '浮动盈亏(元)', '盈亏比(%)', '除权除息'] # 国泰君安没有'盈亏比(%)'和'除权除息'字段
+    positionHeader = ['证券代码', '证券名称', '实际数量', '可用数量', '市值(元)', '最新价格', '成本价(元)', '浮动盈亏(元)', '盈亏比(%)', '除权除息', '建仓时间'] # 国泰君安没有'盈亏比(%)'和'除权除息'字段
 
     accountPath = 'Stock/Program/Broker/{0}'.format(brokerName)
     initCash = 200000
@@ -82,34 +82,35 @@ class SimuTrader(WebTrader):
         return date, data
 
     @classmethod
-    def updatePosClose(cls, eventEngine, info):
+    def updatePosClose(cls, eventEngine, info, dateFromDb=None):
         """
-            更新持仓收盘价到文件
+            更新持仓收盘价到文件，为了除复权
         """
-        info.print('交易接口[{0}]: 开始更新持仓数据的收盘价...'.format(cls.brokerName), DyLogData.ind1)
+        info.print('交易接口[{}]: 开始更新持仓数据的收盘价...'.format(cls.brokerName), DyLogData.ind1)
 
         date, data = cls.__readAccountFile()
         if date is None:
-            info.print('交易接口[{0}]: 没有持仓数据'.format(cls.brokerName))
+            info.print('交易接口[{}]: 没有持仓数据'.format(cls.brokerName))
             return True
 
-        if data.get('posClose') is not None:
-            info.print('交易接口[{0}]: 持仓数据的收盘价已经更新过了'.format(cls.brokerName))
+        if data.get('posClose') is not None and dateFromDb is None:
+            info.print('交易接口[{}]: 持仓数据的收盘价已经更新过了'.format(cls.brokerName))
             return True
 
         positions = data.get('pos')
         if positions is None:
-            info.print('交易接口[{0}]: 持仓数据文件格式错误: 没有pos对应的数据'.format(cls.brokerName), DyLogData.error)
+            info.print('交易接口[{}]: 持仓数据文件格式错误: 没有pos对应的数据'.format(cls.brokerName), DyLogData.error)
             return False
 
         errorDaysEngine = cls.__constructErrorDaysEngine(eventEngine)
 
         # load close for each position
+        closeDate = date if dateFromDb is None else dateFromDb
         closeData = {}
         for pos in positions:
             code = pos[0]
-            if not errorDaysEngine.loadCode(code, [date, 0], latestAdjFactorInDb=False):
-                info.print('交易接口[{0}]: {1}({2})数据库数据有问题'.format(cls.brokerName, code, pos[1]), DyLogData.error)
+            if not errorDaysEngine.loadCode(code, [closeDate, 0], latestAdjFactorInDb=False):
+                info.print('交易接口[{}]: {}({})数据库数据有问题'.format(cls.brokerName, code, pos[1]), DyLogData.error)
                 return False
 
             df = errorDaysEngine.getDataFrame(code)
@@ -117,15 +118,20 @@ class SimuTrader(WebTrader):
             closeData[code] = df.ix[0, 'close']
 
         # save to file
-        data.update({'posClose': closeData})
+        data['posClose'] = closeData
 
         accountFile = os.path.join(DyCommon.createPath(cls.accountPath), '{}.json'.format(date))
         with open(accountFile, 'w') as f:
             f.write(json.dumps(data, indent=4))
 
-        info.print('交易接口[{0}]: 持仓数据的收盘价更新完成'.format(cls.brokerName), DyLogData.ind1)
+        info.print('交易接口[{}]: 持仓数据[{}]的收盘价[{}]更新完成'.format(cls.brokerName, date, closeDate), DyLogData.ind1)
 
         return True
+
+    def __getDateFromDb(self):
+        errorDaysEngine = self.__constructErrorDaysEngine(self._eventEngine)
+        dateFromDb = errorDaysEngine.tDaysOffsetInDb(DyTime.getDateStr(self._curDay, -1), 0)
+        return dateFromDb
 
     def __verifyAccountFileDate(self, date):
         if date is None:
@@ -137,13 +143,13 @@ class SimuTrader(WebTrader):
                 return True
 
             elif self._curDay > date: # 实盘
-                
-                errorDaysEngine = self.__constructErrorDaysEngine(self._eventEngine)
-                dateFromDb = errorDaysEngine.tDaysOffsetInDb(DyTime.getDateStr(self._curDay, -1), 0)
+                dateFromDb = self.__getDateFromDb()
+                if not dateFromDb:
+                    self._info.print('交易接口[{}]: 数据库最近的交易日[{}]错误'.format(self.brokerName, dateFromDb), DyLogData.error)
+                    return False
 
                 if date != dateFromDb:
-                    self._info.print('交易接口[{0}]: 保存的持仓数据日期[{1}]跟数据库最近的交易日[{2}]不相同'.format(self.brokerName, date, dateFromDb), DyLogData.error)
-                    return False
+                    self._info.print('交易接口[{0}]: 保存的持仓数据日期[{1}]跟数据库最近的交易日[{2}]不相同'.format(self.brokerName, date, dateFromDb), DyLogData.warning)
 
                 return True
 
@@ -168,12 +174,13 @@ class SimuTrader(WebTrader):
         if not self.__verifyAccountFileDate(date):
             return False
 
-        # 收盘数据不是今天的并且还没更新过持仓的收盘价，则需要更新持仓的收盘价到文件
-        if date is not None and  self._curDay != date and data.get('posClose') is None:
-            self._info.print('交易接口[{0}]: 保存的持仓数据[{1}]没有收盘价'.format(self.brokerName, date), DyLogData.ind)
+        # 收盘数据不是昨天(最新)的并且还没更新过持仓的收盘价，则需要更新持仓的收盘价到文件
+        dateFromDb = self.__getDateFromDb()
+        if date is not None and ((dateFromDb == date and data.get('posClose') is None) or dateFromDb > date):
+            self._info.print('交易接口[{}]: 保存的持仓数据[{}]的收盘价不是最新或者没有，更新到最新收盘价'.format(self.brokerName, date), DyLogData.ind)
 
             # update close of pos
-            if not self.updatePosClose(self._eventEngine, self._info):
+            if not self.updatePosClose(self._eventEngine, self._info, dateFromDb=dateFromDb):
                 return False
 
             # read file again to get close of pos
@@ -182,7 +189,7 @@ class SimuTrader(WebTrader):
         # 持久性数据
         self._balance = data.get('balance', [self.initCash, 0, self.initCash])
         self._positions = data.get('pos', [])
-        self._posDate = date # 持仓保存的日期
+        self._posDate = dateFromDb if date is not None and dateFromDb > date else date # 持仓收盘价保存的日期
         self._posCloses = data.get('posClose', {}) # 持仓的收盘价，为了除权除息
         self._posSync = False
 
@@ -301,12 +308,12 @@ class SimuTrader(WebTrader):
                 pos[5] = price
                 pos[6] = cost
                 pos[7] = (price - cost)*totalVolume
-                pos[-2] = (price - pos[6])/pos[6]*100 if pos[6] > 0 else 'N/A'
+                pos[8] = (price - pos[6])/pos[6]*100 if pos[6] > 0 else 'N/A'
                 break
 
         else: # new position
             cost = dealAmount/volume
-            self._positions.append([code, name, volume, 0 if DyStockTradeCommon.T1 else volume, price*volume, price, cost, (price - cost)*volume, (price - cost)/cost*100, '否'])
+            self._positions.append([code, name, volume, 0 if DyStockTradeCommon.T1 else volume, price*volume, price, cost, (price - cost)*volume, (price - cost)/cost*100, '否', time])
 
         # balance
         self._balance[0] = availCash
@@ -373,7 +380,7 @@ class SimuTrader(WebTrader):
         pos[5] = price
         pos[6] = cost
         pos[7] = (price - cost)*totalVolume
-        pos[-2] = (price - pos[6])/pos[6]*100 if pos[6] > 0 else 'N/A'
+        pos[8] = (price - pos[6])/pos[6]*100 if pos[6] > 0 else 'N/A'
 
         # balance
         self._balance[0] = availCash
@@ -443,7 +450,7 @@ class SimuTrader(WebTrader):
             pos[4] = tick.price*pos[2]
             pos[5] = tick.price
             pos[7] = (tick.price - pos[6])*pos[2]
-            pos[-2] = (tick.price - pos[6])/pos[6]*100 if pos[6] > 0 else 'N/A'
+            pos[8] = (tick.price - pos[6])/pos[6]*100 if pos[6] > 0 else 'N/A'
 
             marketValue += pos[4]
 
@@ -456,16 +463,16 @@ class SimuTrader(WebTrader):
         if self._posSync:
             return
 
+        # 确保实时tick的日期比持仓要新，防止重复除复权
+        tick = ticks.get(DyStockCommon.szIndex)
+        if tick is None:
+            return
+
+        if self._posDate is not None and tick.date <= self._posDate:
+            return
+
+        # 确保现在是有效交易时间
         if DyStockTradeCommon.enableCtaEngineTickOptimization:
-            # 确保实时tick的日期比持仓要新
-            tick = ticks.get(DyStockCommon.szIndex)
-            if tick is None:
-                return
-
-            if tick.date <= self._posDate:
-                return
-
-            # 确保现在是有效交易时间
             if not '09:25:00' <= tick.time < '15:00:00':
                 return
 
@@ -486,7 +493,7 @@ class SimuTrader(WebTrader):
             pos[3] /= adjFactor
             pos[6] *= adjFactor
 
-            pos[-1] = '否' if adjFactor == 1 else '是'
+            pos[9] = '否' if adjFactor == 1 else '是'
 
         # If xrxd, need to update again
         # Here for simplicity, no matter xrxd or not, always update.
